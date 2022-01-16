@@ -54,7 +54,7 @@ typedef struct mi_option_desc_s {
 #define MI_OPTION(opt)        mi_option_##opt, #opt
 #define MI_OPTION_DESC(opt)   {0, UNINIT, MI_OPTION(opt) }
 
-static mi_option_desc_t options[_mi_option_last] =
+static mi_option_desc_t g_mi_options[_mi_option_last] =
 {
   // stable options
 #if MI_DEBUG || defined(MI_SHOW_ERRORS)
@@ -106,7 +106,7 @@ void _mi_options_init(void) {
     mi_option_t option = (mi_option_t)i;
     long l = mi_option_get(option); MI_UNUSED(l); // initialize
     if (option != mi_option_verbose) {
-      mi_option_desc_t* desc = &options[option];
+      mi_option_desc_t* desc = &g_mi_options[option];
       _mi_verbose_message("option '%s': %ld\n", desc->name, desc->value);
     }
   }
@@ -116,7 +116,7 @@ void _mi_options_init(void) {
 
 mi_decl_nodiscard long mi_option_get(mi_option_t option) {
   mi_assert(option >= 0 && option < _mi_option_last);
-  mi_option_desc_t* desc = &options[option];
+  mi_option_desc_t* desc = &g_mi_options[option];
   mi_assert(desc->option == option);  // index should match the option
   if (mi_unlikely(desc->init == UNINIT)) {
     mi_option_init(desc);
@@ -126,7 +126,7 @@ mi_decl_nodiscard long mi_option_get(mi_option_t option) {
 
 void mi_option_set(mi_option_t option, long value) {
   mi_assert(option >= 0 && option < _mi_option_last);
-  mi_option_desc_t* desc = &options[option];
+  mi_option_desc_t* desc = &g_mi_options[option];
   mi_assert(desc->option == option);  // index should match the option
   desc->value = value;
   desc->init = INITIALIZED;
@@ -134,7 +134,7 @@ void mi_option_set(mi_option_t option, long value) {
 
 void mi_option_set_default(mi_option_t option, long value) {
   mi_assert(option >= 0 && option < _mi_option_last);
-  mi_option_desc_t* desc = &options[option];
+  mi_option_desc_t* desc = &g_mi_options[option];
   if (desc->init != INITIALIZED) {
     desc->value = value;
   }
@@ -179,35 +179,35 @@ static void mi_out_stderr(const char* msg, void* arg) {
 #ifndef MI_MAX_DELAY_OUTPUT
 #define MI_MAX_DELAY_OUTPUT ((size_t)(32*1024))
 #endif
-static char out_buf[MI_MAX_DELAY_OUTPUT+1];
-static _Atomic(size_t) out_len;
+static char g_mi_out_buf[MI_MAX_DELAY_OUTPUT+1];
+static _Atomic(size_t) g_mi_out_len;
 
 static void mi_out_buf(const char* msg, void* arg) {
   MI_UNUSED(arg);
   if (msg==NULL) return;
-  if (mi_atomic_load_relaxed(&out_len)>=MI_MAX_DELAY_OUTPUT) return;
+  if (mi_atomic_load_relaxed(&g_mi_out_len)>=MI_MAX_DELAY_OUTPUT) return;
   size_t n = strlen(msg);
   if (n==0) return;
   // claim space
-  size_t start = mi_atomic_add_acq_rel(&out_len, n);
+  size_t start = mi_atomic_add_acq_rel(&g_mi_out_len, n);
   if (start >= MI_MAX_DELAY_OUTPUT) return;
   // check bound
   if (start+n >= MI_MAX_DELAY_OUTPUT) {
     n = MI_MAX_DELAY_OUTPUT-start-1;
   }
-  _mi_memcpy(&out_buf[start], msg, n);
+  _mi_memcpy(&g_mi_out_buf[start], msg, n);
 }
 
 static void mi_out_buf_flush(mi_output_fun* out, bool no_more_buf, void* arg) {
   if (out==NULL) return;
   // claim (if `no_more_buf == true`, no more output will be added after this point)
-  size_t count = mi_atomic_add_acq_rel(&out_len, (no_more_buf ? MI_MAX_DELAY_OUTPUT : 1));
+  size_t count = mi_atomic_add_acq_rel(&g_mi_out_len, (no_more_buf ? MI_MAX_DELAY_OUTPUT : 1));
   // and output the current contents
   if (count>MI_MAX_DELAY_OUTPUT) count = MI_MAX_DELAY_OUTPUT;
-  out_buf[count] = 0;
-  out(out_buf,arg);
+  g_mi_out_buf[count] = 0;
+  out(g_mi_out_buf,arg);
   if (!no_more_buf) {
-    out_buf[count] = '\n'; // if continue with the buffer, insert a newline
+    g_mi_out_buf[count] = '\n'; // if continue with the buffer, insert a newline
   }
 }
 
@@ -355,7 +355,7 @@ static _Atomic(void*) mi_error_arg;     // = NULL
 
 static void mi_error_default(int err) {
   MI_UNUSED(err);
-#if (MI_DEBUG>0) 
+#if (MI_DEBUG>0)
   if (err==EFAULT) {
     #ifdef _MSC_VER
     __debugbreak();
@@ -437,23 +437,23 @@ static bool mi_getenv(const char* name, char* result, size_t result_size) {
   return (len > 0 && len < result_size);
 }
 #elif !defined(MI_USE_ENVIRON) || (MI_USE_ENVIRON!=0)
-// On Posix systemsr use `environ` to acces environment variables 
+// On Posix systemsr use `environ` to acces environment variables
 // even before the C runtime is initialized.
 #if defined(__APPLE__) && defined(__has_include) && __has_include(<crt_externs.h>)
 #include <crt_externs.h>
 static char** mi_get_environ(void) {
   return (*_NSGetEnviron());
 }
-#else 
+#else
 extern char** environ;
 static char** mi_get_environ(void) {
   return environ;
 }
 #endif
 static bool mi_getenv(const char* name, char* result, size_t result_size) {
-  if (name==NULL) return false;  
+  if (name==NULL) return false;
   const size_t len = strlen(name);
-  if (len == 0) return false;  
+  if (len == 0) return false;
   char** env = mi_get_environ();
   if (env == NULL) return false;
   // compare up to 256 entries
@@ -467,7 +467,7 @@ static bool mi_getenv(const char* name, char* result, size_t result_size) {
   }
   return false;
 }
-#else  
+#else
 // fallback: use standard C `getenv` but this cannot be used while initializing the C runtime
 static bool mi_getenv(const char* name, char* result, size_t result_size) {
   // cannot call getenv() when still initializing the C runtime.
@@ -495,7 +495,7 @@ static bool mi_getenv(const char* name, char* result, size_t result_size) {
 #endif  // !MI_USE_ENVIRON
 #endif  // !MI_NO_GETENV
 
-static void mi_option_init(mi_option_desc_t* desc) {  
+static void mi_option_init(mi_option_desc_t* desc) {
   // Read option value from the environment
   char buf[64+1];
   mi_strlcpy(buf, "mimalloc_", sizeof(buf));
